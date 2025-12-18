@@ -1,7 +1,9 @@
-name: Scraper
+name: Scraper Bali Auto
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: '0 */6 * * *'  # Toutes les 6 heures
 
 jobs:
   scrape:
@@ -26,9 +28,18 @@ jobs:
           echo "=== Resultats ==="
           cat resultats.csv || echo "Pas de fichier"
       
-      - name: Upload results
+      - name: Commit CSV to repo
+        if: success()
+        run: |
+          git config user.name "GitHub Actions Bot"
+          git config user.email "actions@github.com"
+          git add resultats.csv
+          git diff --quiet && git diff --staged --quiet || git commit -m "Update Bali data $(date +'%Y-%m-%d %H:%M')"
+          git push
+      
+      - name: Upload artifact (backup)
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: resultats
+          name: resultats-backup
           path: resultats.csv
