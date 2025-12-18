@@ -1,12 +1,12 @@
 {
-“name”: “99co-scraper”,
-“version”: “2.0.0”,
-“type”: “module”,
-“dependencies”: {
-“crawlee”: “^3.11.5”,
-“csv-writer”: “^1.6.0”
-},
-“engines”: {
-“node”: “>=20.0.0”
-}
+  "name": "99co-scraper",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "scrape": "node scraper.js"
+  },
+  "dependencies": {
+    "crawlee": "^3.7.2",
+    "csv-writer": "^1.6.0"
+  }
 }
