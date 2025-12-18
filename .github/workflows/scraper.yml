@@ -1,24 +1,3 @@
-name: Scraper Bali Auto
-
-on:
-  workflow_dispatch:
-  schedule:
-    - cron: '0 */6 * * *'  # Toutes les 6 heures
-
-jobs:
-  scrape:
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-      
       - name: Run scraper
         run: node scraper.js
       
@@ -26,7 +5,7 @@ jobs:
         if: always()
         run: |
           echo "=== Resultats ==="
-          cat resultats.csv || echo "Pas de fichier"
+          cat resultats.csv || echo "Pas de fichier généré"
       
       - name: Commit CSV to repo
         if: success()
@@ -34,8 +13,7 @@ jobs:
           git config user.name "GitHub Actions Bot"
           git config user.email "actions@github.com"
           git add resultats.csv
-          git diff --quiet && git diff --staged --quiet || git commit -m "Update Bali data $(date +'%Y-%m-%d %H:%M')"
-          git push
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Update Bali data $(date +'%Y-%m-%d %H:%M')" && git push)
       
       - name: Upload artifact (backup)
         uses: actions/upload-artifact@v4
