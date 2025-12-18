@@ -46,8 +46,8 @@ function extractPrice(item, text) {
     const t = text.match(/([\d\.]+)\s*(jt|juta|miliar|billion)/);
     if (t) {
       let v = parseFloat(t[1].replace(/\./g, ''));
-      if (t[2].includes('jt') || t[2].includes('juta')) v *= 1_000_000;
-      if (t[2].includes('miliar') || t[2].includes('billion')) v *= 1_000_000_000;
+      if (t[2].includes('jt') || t[2].includes('juta')) v *= 1000000;
+      if (t[2].includes('miliar') || t[2].includes('billion')) v *= 1000000000;
       if (v > 1_000_000) return Math.round(v);
     }
   } catch {}
@@ -79,9 +79,15 @@ const crawler = new PlaywrightCrawler({
 
     const results = [];
 
-    // 🔑 INTERCEPTION API 99.CO
+    // 🔑 INTERCEPTION API 99.CO (Version de débogage)
     await page.route('**/*', async route => {
       const url = route.request().url();
+      const method = route.request().method();
+
+      // Log toutes les requêtes POST et les requêtes GET qui pourraient être l'API
+      if (method === 'POST' || (method === 'GET' && url.includes('api'))) {
+          console.log(`DEBUG API: ${method} ${url}`);
+      }
 
       if (url.includes('/search') && url.includes('jual')) {
         try {
@@ -100,7 +106,8 @@ const crawler = new PlaywrightCrawler({
           }
 
           return route.fulfill({ response });
-        } catch {
+        } catch (e) {
+          console.error(`Erreur lors du traitement de l'ancienne API: ${e.message}`);
           return route.continue();
         }
       }
@@ -109,20 +116,10 @@ const crawler = new PlaywrightCrawler({
     });
 
     // Navigation
-    await page.goto(request.url, { waitUntil: 'domcontentloaded' }); // Changé pour domcontentloaded
+    await page.goto(request.url, { waitUntil: 'domcontentloaded' });
 
-    // 🔑 ATTENDRE L'APPEL API DE RECHERCHE (Nouveau bloc)
-    try {
-        await page.waitForResponse(response => 
-            response.url().includes('/search') && response.url().includes('jual'), 
-            { timeout: 15000 } // Attendre jusqu'à 15 secondes
-        );
-    } catch (e) {
-        console.log("⚠️ L'appel API de recherche n'a pas été détecté dans le délai imparti.");
-    }
-    
-    // Attendre un peu plus pour s'assurer que toutes les données sont chargées
-    await page.waitForTimeout(2000);
+    // 🔑 ATTENDRE 15 SECONDES POUR LE DÉBOGAGE
+    await page.waitForTimeout(15000);
 
     console.log(`📦 Total annonces collectées: ${results.length}`);
 
@@ -140,11 +137,11 @@ const crawler = new PlaywrightCrawler({
 
       let link = 'URL_MANQUANTE';
       if (item.slug) {
-        link = `https://www.99.co/id/properti/${item.slug}`;
+        link = `https://www.99.co/id/properti/<LaTex>${item.slug}`;
       } else if (item.url) {
         link = item.url.startsWith('http')
           ? item.url
-          : `https://www.99.co${item.url}`;
+          : `https://www.99.co$</LaTex>{item.url}`;
       }
 
       const h = hash(link);
@@ -175,9 +172,9 @@ try {
 
 // ================= WRITE CSV =================
 const csv = rows.map(r =>
-  r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')
+  r.map(v => `"<LaTex>${String(v).replace(/"/g, '""')}"`).join(',')
 ).join('\n');
 
 fs.writeFileSync(OUTPUT_CSV, csv, 'utf8');
 
-console.log(`✅ CSV généré: ${rows.length - 1} annonces`);
+console.log(`✅ CSV généré: $</LaTex>{rows.length - 1} annonces`);
