@@ -11,46 +11,34 @@ const csvWriter = createObjectCsvWriter({
 });
 
 const crawler = new PlaywrightCrawler({
-    // On simule un vrai utilisateur pour éviter le blocage
-    launchContext: {
-        launchOptions: {
-            headless: true,
-        },
-    },
+    // On force le mode sans tête pour GitHub
+    launchContext: { launchOptions: { headless: true } },
     async requestHandler({ page, log }) {
-        log.info(`Analyse de : ${page.url()}`);
+        log.info(`Analyse de la page...`);
         
-        // Attendre que le contenu soit là
-        await page.waitForSelector('h1', { timeout: 30000 });
+        // On attend que la page soit chargée
+        await page.waitForLoadState('networkidle');
 
-        // MÉTHODE GÉNIE : Extraire les données du script __NEXT_DATA__
-        const data = await page.executeScript(() => {
-            const script = document.getElementById('__NEXT_DATA__');
-            if (!script) return null;
-            const json = JSON.parse(script.textContent);
-            
-            // On cherche la liste des annonces dans la structure complexe de Next.js
-            const listings = json.props?.pageProps?.initialState?.search?.result?.list || 
-                             json.props?.pageProps?.searchResults?.list || [];
-            
-            return listings.map(item => ({
-                title: item.title || 'Sans titre',
-                price: item.priceFormatted || (item.price ? `${item.price}` : '0'),
-                link: item.url ? `https://www.99.co${item.url}` : ''
+        // On extrait les données depuis le script interne __NEXT_DATA__ (le secret des pros)
+        const listings = await page.evaluate(() => {
+            const data = JSON.parse(document.getElementById('__NEXT_DATA__').textContent);
+            // On va chercher dans la structure spécifique de 99.co
+            const list = data.props?.pageProps?.initialState?.search?.result?.list || [];
+            return list.map(item => ({
+                title: item.title,
+                price: item.priceFormatted || item.price,
+                link: `https://www.99.co${item.url}`
             }));
         });
 
-        if (data && data.length > 0) {
-            log.info(`✅ ${data.length} annonces trouvées !`);
-            await csvWriter.writeRecords(data);
+        if (listings.length > 0) {
+            log.info(`✅ ${listings.length} annonces trouvées !`);
+            await csvWriter.writeRecords(listings);
         } else {
-            throw new Error("Aucune donnée trouvée. Le sélecteur ou la structure a changé.");
+            log.error('❌ Aucune annonce trouvée dans le JSON.');
+            process.exit(1); // Force l'erreur pour voir le log dans GitHub
         }
-    },
-    // En cas d'échec
-    failedRequestHandler({ request, log }) {
-        log.error(`La requête ${request.url} a échoué trop de fois.`);
-    },
+    }
 });
 
 await crawler.run(['https://www.99.co/id/jual/tanah/bali']);
