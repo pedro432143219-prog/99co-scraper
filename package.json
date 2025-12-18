@@ -2,12 +2,9 @@
   "name": "99co-scraper",
   "version": "1.0.0",
   "type": "module",
-  "scripts": {
-    "start": "node scraper.js"
-  },
   "dependencies": {
     "crawlee": "^3.0.0",
-    "cheerio": "^1.0.0-rc.12",
+    "playwright": "^1.42.0",
     "csv-writer": "^1.6.0"
   }
 }
