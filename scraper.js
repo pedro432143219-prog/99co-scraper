@@ -3,17 +3,17 @@ import fs from 'fs';
 import { createObjectCsvWriter } from 'csv-writer';
 
 const OUTPUT = 'resultats.csv';
-
-// === CONFIG BALI ===
 const BASE_URL = 'https://www.99.co/id/jual/tanah/bali';
-const MAX_PAGES = 5; // augmente progressivement (ex: 20)
+const MAX_PAGES = 5;
 
-// === CSV ===
+// ================= CSV =================
 const csvWriter = createObjectCsvWriter({
   path: OUTPUT,
   header: [
     { id: 'titre', title: 'Titre' },
-    { id: 'prix', title: 'Prix' },
+    { id: 'prix', title: 'Prix_total_IDR' },
+    { id: 'surface', title: 'Surface_m2' },
+    { id: 'prix_m2', title: 'Prix_m2_IDR' },
     { id: 'lien', title: 'Lien' }
   ],
   append: false
@@ -21,7 +21,33 @@ const csvWriter = createObjectCsvWriter({
 
 const results = [];
 
-// === CRAWLER ===
+// ================= HELPERS (GAS → NODE) =================
+function findListings(data) {
+  return (
+    data?.props?.pageProps?.data?.listings ||
+    data?.props?.pageProps?.initialState?.search?.result?.list ||
+    data?.props?.pageProps?.searchResult?.list ||
+    []
+  );
+}
+
+function extractSurface(item, text) {
+  if (item?.attributes?.land_size) return parseInt(item.attributes.land_size, 10) || 0;
+  if (item?.land_size) return parseInt(item.land_size, 10) || 0;
+
+  const m = text.match(/(\d{2,6})\s*(m2|sqm|m²)/);
+  return m ? parseInt(m[1], 10) : 0;
+}
+
+function extractPrice(item, text) {
+  if (item?.attributes?.price) return parseInt(item.attributes.price, 10) || 0;
+  if (item?.price) return parseInt(item.price, 10) || 0;
+
+  const m = text.match(/"price":\s*"?(\d{8,15})"?/);
+  return m ? parseInt(m[1], 10) : 0;
+}
+
+// ================= CRAWLER =================
 const crawler = new PlaywrightCrawler({
   headless: true,
   maxConcurrency: 2,
@@ -29,44 +55,26 @@ const crawler = new PlaywrightCrawler({
 
   async requestHandler({ page, request, log }) {
     log.info(`📄 ${request.url}`);
-
-    // On attend juste que le JS soit chargé
     await page.waitForTimeout(3000);
 
     const html = await page.content();
-
-    // Extraction __NEXT_DATA__
     const match = html.match(
       /<script id="__NEXT_DATA__" type="application\/json">([\s\S]*?)<\/script>/
     );
-
-    if (!match) {
-      log.warning('❌ __NEXT_DATA__ introuvable');
-      return;
-    }
+    if (!match) return;
 
     const data = JSON.parse(match[1]);
-
-    // Chemins possibles (99.co change parfois)
-    const listings =
-      data?.props?.pageProps?.data?.listings ||
-      data?.props?.pageProps?.initialState?.search?.result?.list ||
-      data?.props?.pageProps?.searchResult?.list ||
-      [];
-
-    if (!Array.isArray(listings) || listings.length === 0) {
-      log.warning('⚠️ 0 annonce trouvée');
-      return;
-    }
+    const listings = findListings(data);
 
     for (const item of listings) {
-      if (!item) continue;
+      const text = JSON.stringify(item).toLowerCase();
+      const surface = extractSurface(item, text);
+      const price = extractPrice(item, text);
 
-      const titre = item.title || item.name || 'Terrain';
-      const prix =
-        item.attributes?.price ||
-        item.price ||
-        0;
+      if (price <= 0) continue;
+      if (surface > 0 && (surface < 1000 || surface > 30000)) continue;
+
+      const prix_m2 = surface > 0 ? Math.round(price / surface) : 0;
 
       let lien = '';
       if (item.slug) {
@@ -77,20 +85,20 @@ const crawler = new PlaywrightCrawler({
           : `https://www.99.co${item.url}`;
       }
 
-      if (!lien) continue;
-
       results.push({
-        titre: titre.toString().trim(),
-        prix: prix ? prix.toString() : '0',
+        titre: item.title || 'Terrain',
+        prix: price,
+        surface,
+        prix_m2,
         lien
       });
     }
 
-    log.info(`✅ ${listings.length} annonces extraites`);
+    log.info(`✅ ${results.length} annonces cumulées`);
   }
 });
 
-// === RUN ===
+// ================= RUN =================
 (async () => {
   try {
     const urls = [];
@@ -99,17 +107,12 @@ const crawler = new PlaywrightCrawler({
     }
 
     await crawler.run(urls);
-
-    // Toujours écrire le CSV (même vide)
     await csvWriter.writeRecords(results);
 
     console.log(`📁 CSV écrit : ${results.length} lignes`);
     process.exit(0);
-
-  } catch (err) {
-    console.error('❌ ERREUR SCRAPER:', err);
-
-    // CSV vide mais valide
+  } catch (e) {
+    console.error('❌ ERREUR SCRAPER:', e);
     await csvWriter.writeRecords([]);
     process.exit(1);
   }
