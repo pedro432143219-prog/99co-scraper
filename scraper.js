@@ -13,31 +13,37 @@ const csvWriter = createObjectCsvWriter({
 const crawler = new PlaywrightCrawler({
     launchContext: { launchOptions: { headless: true } },
     async requestHandler({ page, log }) {
-        log.info('Chargement de la page...');
-        await page.goto('https://www.99.co/id/jual/tanah/bali', { waitUntil: 'networkidle', timeout: 60000 });
-
-        // On extrait les données directement du script de la page
+        log.info('Attente du chargement complet...');
+        // On attend que le réseau soit calme pour être sûr que le JSON est là
+        await page.waitForLoadState('networkidle');
+        
         const listings = await page.evaluate(() => {
             const script = document.getElementById('__NEXT_DATA__');
             if (!script) return [];
+            
             const data = JSON.parse(script.textContent);
-            const items = data.props?.pageProps?.initialState?.search?.result?.list || [];
+            
+            // On essaie plusieurs chemins possibles pour trouver les annonces
+            const items = data.props?.pageProps?.initialState?.search?.result?.list || 
+                          data.props?.pageProps?.searchResults?.list || 
+                          data.props?.pageProps?.data?.listings || [];
+                          
             return items.map(i => ({
-                title: i.title || 'Sans titre',
-                price: i.priceFormatted || i.price || '0',
-                link: 'https://www.99.co' + i.url
+                title: i.title || 'Titre inconnu',
+                price: i.priceFormatted || (i.price ? i.price.toString() : '0'),
+                link: i.url ? 'https://www.99.co' + i.url : 'Pas de lien'
             }));
         });
 
         if (listings.length > 0) {
-            log.info(`✅ ${listings.length} annonces trouvées !`);
+            log.info(`✅ GENIAL : ${listings.length} annonces extraites !`);
             await csvWriter.writeRecords(listings);
         } else {
-            // Si on ne trouve rien, on enregistre une ligne d'erreur pour ne pas avoir un CSV vide
-            await csvWriter.writeRecords([{ title: 'ERREUR', price: '0', link: 'Aucune donnée trouvée' }]);
-            throw new Error('Aucune annonce trouvée. Le site a peut-être changé sa structure.');
+            log.error('❌ Le fichier sera vide car aucune annonce n’a été trouvée dans le JSON.');
+            // On crée une ligne de debug pour comprendre dans le CSV ce qui manque
+            await csvWriter.writeRecords([{ title: 'DEBUG: Aucune donnée trouvée', price: '0', link: 'Vérifier la structure du site' }]);
         }
     },
 });
 
-await crawler.run();
+await crawler.run(['https://www.99.co/id/jual/tanah/bali']);
