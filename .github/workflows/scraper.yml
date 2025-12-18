@@ -23,7 +23,7 @@ jobs:
         run: npm install
       
       - name: Install Playwright browsers
-        run: npx playwright install chromium # <--- NOUVELLE ÉTAPE
+        run: npx playwright install chromium # Ajouté pour Playwright
       
       - name: Run scraper
         run: node scraper.js
@@ -55,13 +55,12 @@ jobs:
           retention-days: 1
       
       - name: Commit CSV
+        uses: stefanzweifel/git-auto-commit-action@v5 # Remplacement de l'étape manuelle
         if: success()
-        run: |
-          git config user.name "Bot"
-          git config user.email "bot@github.com"
-          git add resultats.csv
-          git diff --quiet && git diff --staged --quiet || \
-            (git commit -m "Update $(date -u +'%Y-%m-%d %H:%M')" && git push)
+        with:
+          commit_message: "Update $(date -u +'%Y-%m-%d %H:%M')"
+          file_pattern: 'resultats.csv'
+          # Le GITHUB_TOKEN est utilisé automatiquement par cette action
       
       - name: Upload CSV
         uses: actions/upload-artifact@v4
