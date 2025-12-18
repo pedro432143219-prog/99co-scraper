@@ -9,6 +9,8 @@ jobs:
   scrape:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions: # <--- CORRECTION POUR LE PUSH
+      contents: write
     
     steps:
       - name: Checkout
@@ -23,7 +25,7 @@ jobs:
         run: npm install
       
       - name: Install Playwright browsers
-        run: npx playwright install chromium # Ajouté pour Playwright
+        run: npx playwright install chromium
       
       - name: Run scraper
         run: node scraper.js
@@ -55,12 +57,11 @@ jobs:
           retention-days: 1
       
       - name: Commit CSV
-        uses: stefanzweifel/git-auto-commit-action@v5 # Remplacement de l'étape manuelle
+        uses: stefanzweifel/git-auto-commit-action@v5
         if: success()
         with:
           commit_message: "Update $(date -u +'%Y-%m-%d %H:%M')"
           file_pattern: 'resultats.csv'
-          # Le GITHUB_TOKEN est utilisé automatiquement par cette action
       
       - name: Upload CSV
         uses: actions/upload-artifact@v4
