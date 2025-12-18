@@ -1,9 +1,12 @@
 {
   "name": "99co-scraper",
   "version": "1.0.0",
-  "type": "commonjs",
+  "type": "module",
   "scripts": {
     "start": "node scraper.js"
   },
-  "dependencies": {}
+  "dependencies": {
+    "puppeteer": "^21.0.0",
+    "csv-writer": "^1.6.0"
+  }
 }
