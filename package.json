@@ -3,8 +3,8 @@
   "version": "1.0.0",
   "type": "module",
   "dependencies": {
+    "csv-writer": "^1.6.0",
     "crawlee": "^3.0.0",
-    "playwright": "^1.42.0",
-    "csv-writer": "^1.6.0"
+    "playwright": "^1.40.0"
   }
 }
