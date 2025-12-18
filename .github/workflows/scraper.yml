@@ -16,14 +16,15 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'npm'
+          # On a supprimé la ligne "cache: npm" qui causait l'erreur
   
       - name: Install dependencies
         run: npm install
   
       - name: Install Playwright Browsers
+        # Cette ligne est CRUCIAL pour que Crawlee puisse ouvrir une page
         run: npx playwright install --with-deps chromium
-
+  
       - name: Run scraper
         run: node scraper.js
   
@@ -33,13 +34,12 @@ jobs:
           git config user.name "Bot"
           git config user.email "bot@github.com"
           git add resultats.csv
-          git diff --quiet && git diff --staged --quiet || \
-            (git commit -m "Update $(date -u +'%Y-%m-%d %H:%M')" && git push)
+          # On vérifie s'il y a des changements avant de commit pour éviter de planter
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Update $(date -u +'%Y-%m-%d %H:%M')" && git push)
 
       - name: Upload CSV
         uses: actions/upload-artifact@v4
-        if: always() # Toujours uploader pour debugger si ça rate
+        if: always()
         with:
           name: resultats
           path: resultats.csv
-          retention-days: 7
