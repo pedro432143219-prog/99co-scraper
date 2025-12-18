@@ -109,10 +109,20 @@ const crawler = new PlaywrightCrawler({
     });
 
     // Navigation
-    await page.goto(request.url, { waitUntil: 'networkidle' });
+    await page.goto(request.url, { waitUntil: 'domcontentloaded' }); // Changé pour domcontentloaded
 
-    // Laisser le temps aux XHR
-    await page.waitForTimeout(4000);
+    // 🔑 ATTENDRE L'APPEL API DE RECHERCHE (Nouveau bloc)
+    try {
+        await page.waitForResponse(response => 
+            response.url().includes('/search') && response.url().includes('jual'), 
+            { timeout: 15000 } // Attendre jusqu'à 15 secondes
+        );
+    } catch (e) {
+        console.log("⚠️ L'appel API de recherche n'a pas été détecté dans le délai imparti.");
+    }
+    
+    // Attendre un peu plus pour s'assurer que toutes les données sont chargées
+    await page.waitForTimeout(2000);
 
     console.log(`📦 Total annonces collectées: ${results.length}`);
 
