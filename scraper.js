@@ -2,260 +2,288 @@ import { createObjectCsvWriter } from ‘csv-writer’;
 import { writeFileSync } from ‘fs’;
 
 const CONFIG = {
-BASE_URL: ‘https://www.99.co’,
-SEARCH_URL: ‘https://www.99.co/id/jual/tanah/bali’,
-MAX_PAGES: 5,
-DELAY: 2000,
+// API interne de 99.co (découverte via DevTools)
+API_URL: ‘https://www.99.co/api/v1/web/search/listings’,
+REGION: ‘bali’,
+MAX_RESULTS: 100,
 MIN_SURFACE: 1000,
-MAX_SURFACE: 30000
+MAX_SURFACE: 30000,
+RETRY_ATTEMPTS: 3,
+RETRY_DELAY: 3000
 };
 
-async function sleep(ms) {
+function sleep(ms) {
 return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-async function fetchPage(url) {
+async function fetchWithRetry(url, options, attempt = 1) {
 try {
-console.log(`📡 Fetching: ${url}`);
-const response = await fetch(url, {
-headers: {
-‘User-Agent’: ‘Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36’
-}
-});
+console.log(`📡 Tentative ${attempt}/${CONFIG.RETRY_ATTEMPTS}: ${url}`);
 
 ```
+const response = await fetch(url, {
+  ...options,
+  signal: AbortSignal.timeout(15000) // 15s timeout
+});
+
+console.log(`   Status: ${response.status} ${response.statusText}`);
+
 if (!response.ok) {
-  throw new Error(`HTTP ${response.status}`);
+  if (attempt < CONFIG.RETRY_ATTEMPTS) {
+    console.log(`   ⏳ Retry dans ${CONFIG.RETRY_DELAY}ms...`);
+    await sleep(CONFIG.RETRY_DELAY);
+    return fetchWithRetry(url, options, attempt + 1);
+  }
+  throw new Error(`HTTP ${response.status}: ${response.statusText}`);
 }
 
+const contentType = response.headers.get('content-type');
+console.log(`   Content-Type: ${contentType}`);
+
+// Essayer JSON d'abord
+if (contentType?.includes('application/json')) {
+  const data = await response.json();
+  console.log(`   ✅ JSON reçu: ${JSON.stringify(data).length} chars`);
+  return { type: 'json', data };
+}
+
+// Sinon HTML
 const html = await response.text();
+console.log(`   ✅ HTML reçu: ${(html.length / 1024).toFixed(2)} KB`);
 
-// Sauvegarde pour debug (seulement première page)
-if (url.includes('page=1') || !url.includes('page=')) {
-  writeFileSync('debug.html', html, 'utf8');
-  console.log('💾 debug.html sauvegardé');
-}
+writeFileSync('debug.html', html, 'utf8');
+console.log('   💾 debug.html sauvegardé');
 
-return html;
+return { type: 'html', data: html };
 ```
 
 } catch (error) {
-console.error(`❌ Erreur fetch: ${error.message}`);
+console.error(`   ❌ Erreur: ${error.message}`);
+
+```
+if (attempt < CONFIG.RETRY_ATTEMPTS && error.name !== 'AbortError') {
+  console.log(`   ⏳ Retry dans ${CONFIG.RETRY_DELAY}ms...`);
+  await sleep(CONFIG.RETRY_DELAY);
+  return fetchWithRetry(url, options, attempt + 1);
+}
+
+throw error;
+```
+
+}
+}
+
+async function tryAPIApproach() {
+console.log(’\n🔬 APPROCHE 1: API directe’);
+
+try {
+const params = new URLSearchParams({
+listing_type: ‘sale’,
+property_type: ‘land’,
+search_region: CONFIG.REGION,
+page_size: CONFIG.MAX_RESULTS,
+page: 1
+});
+
+```
+const url = `${CONFIG.API_URL}?${params}`;
+
+const result = await fetchWithRetry(url, {
+  headers: {
+    'Accept': 'application/json',
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+    'Referer': 'https://www.99.co/id/jual/tanah/bali'
+  }
+});
+
+if (result.type === 'json' && result.data?.listings) {
+  return result.data.listings;
+}
+
+console.log('   ⚠️ Pas de listings dans la réponse JSON');
+return null;
+```
+
+} catch (error) {
+console.error(`   ❌ API approach failed: ${error.message}`);
 return null;
 }
 }
 
-function extractListingsFromHTML(html) {
+async function tryHTMLScraping() {
+console.log(’\n🔬 APPROCHE 2: Scraping HTML classique’);
+
 try {
-const match = html.match(/<script id="__NEXT_DATA__" type="application\/json">([\s\S]*?)</script>/);
+const url = ‘https://www.99.co/id/jual/tanah/bali’;
 
 ```
+const result = await fetchWithRetry(url, {
+  headers: {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    'Accept-Language': 'id-ID,id;q=0.9,en;q=0.8',
+    'Cache-Control': 'no-cache',
+    'Pragma': 'no-cache'
+  }
+});
+
+if (result.type !== 'html') {
+  console.log('   ⚠️ Response is not HTML');
+  return null;
+}
+
+const html = result.data;
+
+// Extraction du JSON embarqué
+const match = html.match(/<script id="__NEXT_DATA__" type="application\/json">([\s\S]*?)<\/script>/);
+
 if (!match) {
-  console.log('⚠️ Aucun __NEXT_DATA__ trouvé');
-  return [];
+  console.log('   ⚠️ __NEXT_DATA__ non trouvé');
+  
+  // Test si la page contient du texte cohérent
+  if (html.includes('99.co') || html.includes('properti')) {
+    console.log('   ℹ️ Page 99.co détectée mais structure différente');
+  } else {
+    console.log('   ⚠️ Page suspecte (possible blocage)');
+  }
+  
+  return null;
 }
 
-const data = JSON.parse(match[1]);
+console.log('   ✅ __NEXT_DATA__ trouvé');
 
-// Plusieurs chemins possibles selon la structure
-let listings = data?.props?.pageProps?.data?.listings || 
-               data?.props?.pageProps?.initialState?.search?.result?.list ||
-               data?.props?.pageProps?.searchResult?.list ||
-               [];
+const jsonData = JSON.parse(match[1]);
 
-// Si les listings sont dans des groupes
-if (listings.length > 0 && listings[0]?.data) {
-  listings = listings.flatMap(group => group.data || []);
+// Multiples chemins possibles
+const paths = [
+  'props.pageProps.data.listings',
+  'props.pageProps.initialState.search.result.list',
+  'props.pageProps.searchResult.list',
+  'props.pageProps.listings'
+];
+
+for (const path of paths) {
+  const value = path.split('.').reduce((obj, key) => obj?.[key], jsonData);
+  if (Array.isArray(value) && value.length > 0) {
+    console.log(`   ✅ Listings trouvés via: ${path} (${value.length} items)`);
+    
+    // Si ce sont des groupes, flatten
+    if (value[0]?.data) {
+      return value.flatMap(group => group.data || []);
+    }
+    
+    return value;
+  }
 }
 
-return listings;
+console.log('   ⚠️ Aucun chemin de listings valide');
+return null;
 ```
 
 } catch (error) {
-console.error(`❌ Erreur parsing JSON: ${error.message}`);
-return [];
+console.error(`   ❌ HTML scraping failed: ${error.message}`);
+return null;
 }
 }
 
-function extractSurface(item) {
-try {
-// Priorité aux attributs structurés
+function extractData(item) {
+// Surface
+let surface = 0;
 if (item.attributes?.land_size) {
-const val = parseInt(item.attributes.land_size, 10);
-if (val > 0) return val;
-}
-
-```
-if (item.land_size) {
-  const val = parseInt(item.land_size, 10);
-  if (val > 0) return val;
-}
-
-// Sinon extraction du titre
-const text = (item.title || '').toLowerCase();
+surface = parseInt(item.attributes.land_size, 10) || 0;
+} else if (item.land_size) {
+surface = parseInt(item.land_size, 10) || 0;
+} else {
+const text = (item.title || ‘’).toLowerCase();
 const match = text.match(/(\d{3,6})\s*(?:m2|m²|sqm)/i);
-
-if (match) {
-  return parseInt(match[1], 10);
+if (match) surface = parseInt(match[1], 10);
 }
 
-return 0;
-```
-
-} catch {
-return 0;
-}
-}
-
-function extractPrice(item) {
-try {
+// Prix
+let price = 0;
 if (item.attributes?.price) {
-return parseInt(item.attributes.price, 10) || 0;
+price = parseInt(item.attributes.price, 10) || 0;
+} else if (item.price) {
+price = parseInt(item.price, 10) || 0;
 }
 
-```
-if (item.price) {
-  return parseInt(item.price, 10) || 0;
-}
-
-// Extraction depuis le texte
-const text = JSON.stringify(item).toLowerCase();
-const match = text.match(/"price":\s*"?(\d{8,15})"?/);
-
-if (match) {
-  return parseInt(match[1], 10);
-}
-
-return 0;
-```
-
-} catch {
-return 0;
-}
-}
-
-function buildURL(item) {
-try {
+// URL
+let lien = ‘URL_MANQUANTE’;
 if (item.slug) {
-return `${CONFIG.BASE_URL}/id/properti/${item.slug}`;
+lien = `https://www.99.co/id/properti/${item.slug}`;
+} else if (item.url) {
+const cleanPath = item.url.startsWith(’/’) ? item.url : ‘/’ + item.url;
+lien = `https://www.99.co${cleanPath}`;
 }
 
-```
-if (item.url) {
-  const cleanPath = item.url.startsWith('/') ? item.url : '/' + item.url;
-  return `${CONFIG.BASE_URL}${cleanPath}`;
+return {
+titre: item.title || ‘Terrain Bali’,
+surface,
+prix: price,
+lien,
+prixM2: (surface > 0 && price > 0) ? Math.round(price / surface) : 0
+};
 }
 
-return 'URL_MANQUANTE';
-```
+function filterAndSort(listings) {
+console.log(`\n📊 Filtrage de ${listings.length} annonces...`);
 
-} catch {
-return ‘URL_MANQUANTE’;
-}
-}
-
-async function scrapeAllPages() {
-const allResults = [];
-let totalProcessed = 0;
-let totalFiltered = 0;
-
-for (let page = 1; page <= CONFIG.MAX_PAGES; page++) {
-const url = page === 1
-? CONFIG.SEARCH_URL
-: `${CONFIG.SEARCH_URL}?page=${page}`;
-
-```
-const html = await fetchPage(url);
-
-if (!html) {
-  console.log(`⏭️ Page ${page} ignorée (fetch échoué)`);
-  break;
-}
-
-const listings = extractListingsFromHTML(html);
-
-if (listings.length === 0) {
-  console.log(`⏭️ Page ${page} : 0 annonces, arrêt`);
-  break;
-}
-
-console.log(`📄 Page ${page} : ${listings.length} annonces trouvées`);
-totalProcessed += listings.length;
-
-let addedFromPage = 0;
+const results = [];
+let stats = {
+total: listings.length,
+noSurface: 0,
+surfaceTooSmall: 0,
+surfaceTooBig: 0,
+noPrice: 0,
+valid: 0
+};
 
 for (const item of listings) {
-  if (!item) continue;
+const data = extractData(item);
 
-  const surface = extractSurface(item);
-  const price = extractPrice(item);
-  const titre = item.title || 'Terrain Bali';
-  const lien = buildURL(item);
-
-  // Filtrage
-  if (surface < CONFIG.MIN_SURFACE || surface > CONFIG.MAX_SURFACE) {
-    totalFiltered++;
-    continue;
-  }
-
-  if (price <= 0) {
-    totalFiltered++;
-    continue;
-  }
-
-  const priceM2 = Math.round(price / surface);
-
-  allResults.push({
-    titre,
-    prix: price,
-    lien,
-    surface,
-    prixM2: priceM2
-  });
-
-  addedFromPage++;
+```
+// Validation
+if (data.surface === 0) {
+  stats.noSurface++;
+  continue;
 }
 
-console.log(`   ✅ ${addedFromPage} ajoutés, ${listings.length - addedFromPage} filtrés`);
-
-// Délai entre pages
-if (page < CONFIG.MAX_PAGES) {
-  await sleep(CONFIG.DELAY);
+if (data.surface < CONFIG.MIN_SURFACE) {
+  stats.surfaceTooSmall++;
+  continue;
 }
+
+if (data.surface > CONFIG.MAX_SURFACE) {
+  stats.surfaceTooBig++;
+  continue;
+}
+
+if (data.prix === 0) {
+  stats.noPrice++;
+  continue;
+}
+
+stats.valid++;
+results.push({
+  titre: data.titre,
+  prix: data.prix,
+  lien: data.lien
+});
 ```
 
 }
 
-console.log(`\n📊 RÉSUMÉ`);
-console.log(`   Total analysé: ${totalProcessed}`);
-console.log(`   Total filtré: ${totalFiltered}`);
-console.log(`   Total retenu: ${allResults.length}`);
+console.log(`   Total: ${stats.total}`);
+console.log(`   Sans surface: ${stats.noSurface}`);
+console.log(`   Surface < ${CONFIG.MIN_SURFACE}m²: ${stats.surfaceTooSmall}`);
+console.log(`   Surface > ${CONFIG.MAX_SURFACE}m²: ${stats.surfaceTooBig}`);
+console.log(`   Sans prix: ${stats.noPrice}`);
+console.log(`   ✅ Valides: ${stats.valid}`);
 
-return allResults;
+return results;
 }
 
 async function saveToCSV(results) {
-if (results.length === 0) {
-console.log(‘⚠️ Aucun résultat à sauvegarder’);
-
-```
-// Créer un CSV vide avec header pour éviter l'erreur
-const csvWriter = createObjectCsvWriter({
-  path: 'resultats.csv',
-  header: [
-    { id: 'titre', title: 'Titre' },
-    { id: 'prix', title: 'Prix (IDR)' },
-    { id: 'lien', title: 'Lien' }
-  ]
-});
-
-await csvWriter.writeRecords([]);
-console.log('📄 CSV vide créé');
-return;
-```
-
-}
-
 const csvWriter = createObjectCsvWriter({
 path: ‘resultats.csv’,
 header: [
@@ -266,25 +294,68 @@ header: [
 });
 
 await csvWriter.writeRecords(results);
-console.log(`✅ CSV créé : ${results.length} lignes`);
+console.log(`\n✅ CSV créé: ${results.length} annonces`);
 }
 
 async function main() {
+console.log(‘🚀 SCRAPER 99.CO BALI - VERSION ROBUSTE\n’);
+console.log(`Région: ${CONFIG.REGION}`);
+console.log(`Filtre surface: ${CONFIG.MIN_SURFACE}-${CONFIG.MAX_SURFACE}m²`);
+console.log(`Max retry: ${CONFIG.RETRY_ATTEMPTS}x`);
+
 try {
-console.log(‘🚀 Démarrage du scraper 99.co Bali\n’);
+let listings = null;
 
 ```
-const results = await scrapeAllPages();
+// Essayer l'API d'abord
+listings = await tryAPIApproach();
+
+// Sinon HTML scraping
+if (!listings || listings.length === 0) {
+  listings = await tryHTMLScraping();
+}
+
+// Si toujours rien
+if (!listings || listings.length === 0) {
+  console.log('\n❌ AUCUNE APPROCHE N\'A FONCTIONNÉ');
+  console.log('Possible causes:');
+  console.log('  - Blocage anti-bot de 99.co');
+  console.log('  - Structure du site changée');
+  console.log('  - Timeout réseau');
+  
+  console.log('\n📄 Création d\'un CSV vide...');
+  await saveToCSV([]);
+  
+  process.exit(1);
+}
+
+// Filtrage et tri
+const results = filterAndSort(listings);
+
+// Sauvegarde
 await saveToCSV(results);
 
-console.log('\n✅ Scraping terminé avec succès');
+console.log('\n✅ SCRAPING RÉUSSI');
 process.exit(0);
 ```
 
 } catch (error) {
-console.error(`\n❌ ERREUR FATALE: ${error.message}`);
-console.error(error.stack);
+console.error(’\n❌ ERREUR FATALE’);
+console.error(`Message: ${error.message}`);
+console.error(`Stack:\n${error.stack}`);
+
+```
+// CSV vide en secours
+try {
+  await saveToCSV([]);
+  console.log('📄 CSV vide créé en secours');
+} catch (e) {
+  console.error(`Impossible de créer le CSV: ${e.message}`);
+}
+
 process.exit(1);
+```
+
 }
 }
 
