@@ -1,0 +1,9 @@
+{
+  "name": "99co-scraper",
+  "version": "1.0.0",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node scraper.js"
+  },
+  "dependencies": {}
+}
