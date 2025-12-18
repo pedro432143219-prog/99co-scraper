@@ -5,60 +5,41 @@ on:
   schedule:
     - cron: '0 */6 * * *'
 
-permissions:
-  contents: write
-
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      
+  
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-      
+          cache: 'npm'
+  
       - name: Install dependencies
         run: npm install
-      
+  
+      - name: Install Playwright Browsers
+        run: npx playwright install --with-deps chromium
+
       - name: Run scraper
         run: node scraper.js
-      
-      - name: Show results
-        if: always()
-        run: |
-          echo "=== RÉSULTATS ==="
-          if [ -f resultats.csv ]; then
-            echo "✅ CSV créé"
-            wc -l resultats.csv
-            echo ""
-            head -n 10 resultats.csv
-          else
-            echo "❌ Pas de CSV"
-          fi
-      
-      - name: Upload CSV artifact
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: resultats-bali-$(date +%Y%m%d-%H%M)
-          path: resultats.csv
-          retention-days: 7
-      
+  
       - name: Commit CSV
         if: success()
         run: |
-          git config --global user.name "GitHub Actions Bot"
-          git config --global user.email "actions@github.com"
+          git config user.name "Bot"
+          git config user.email "bot@github.com"
           git add resultats.csv
-          
-          if git diff --staged --quiet; then
-            echo "✅ Pas de changements à commit"
-          else
-            git commit -m "🤖 Update Bali listings - $(date -u +'%Y-%m-%d %H:%M UTC')"
-            git push origin main || git push origin master
-          fi
+          git diff --quiet && git diff --staged --quiet || \
+            (git commit -m "Update $(date -u +'%Y-%m-%d %H:%M')" && git push)
+
+      - name: Upload CSV
+        uses: actions/upload-artifact@v4
+        if: always() # Toujours uploader pour debugger si ça rate
+        with:
+          name: resultats
+          path: resultats.csv
+          retention-days: 7
