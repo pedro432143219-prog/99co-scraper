@@ -8,7 +8,7 @@ await page.route('**/*', async route => {
 
       const ct = response.headers()['content-type'] || '';
       if (!ct.includes('application/json')) {
-        return route.fulfill({ response });
+        return route.continue();
       }
 
       const json = await response.json();
@@ -25,9 +25,10 @@ await page.route('**/*', async route => {
         listings.forEach(l => results.push(l));
       }
 
-      return route.fulfill({ response });
+      return route.continue();
     }
-  } catch {
+  } catch (e) {
+    console.log('⚠️ route error ignored');
     return route.continue();
   }
 
