@@ -23,7 +23,7 @@ jobs:
 
       - name: Show workspace before install
         run: |
-          echo "=== Workspace BEFORE npm install ==="
+          echo "=== WORKSPACE AVANT INSTALL ==="
           pwd
           ls -la
 
@@ -31,14 +31,16 @@ jobs:
         run: |
           npm ci --no-audit --prefer-offline || npm install
 
-      - name: Show installed packages & node version
+      # 🔥 ÉTAPE CRITIQUE (OBLIGATOIRE POUR PLAYWRIGHT)
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps
+
+      - name: Show versions
         run: |
           node -v
           npm -v
-          ls -la node_modules || true
 
       - name: Run scraper
-        # On exécute le script et on capture la sortie dans un fichier de log
         run: |
           set -o pipefail
           node scraper.js 2>&1 | tee scraper-run.log
@@ -49,40 +51,33 @@ jobs:
         if: always()
         run: |
           echo "=== RÉSULTATS ==="
-          pwd
           ls -la
           if [ -f resultats.csv ]; then
-            echo "✅ CSV créé"
-            wc -l resultats.csv || true
-            echo ""
-            head -n 20 resultats.csv || true
+            echo "✅ CSV trouvé"
+            wc -l resultats.csv
+            head -n 20 resultats.csv
           else
-            echo "❌ Pas de CSV"
+            echo "❌ CSV manquant"
           fi
           echo ""
-          if [ -f debug.html ]; then
-            echo "📄 debug.html: $(wc -c < debug.html) octets"
-          fi
-          echo ""
-          echo "=== Fin du listing ==="
+          echo "=== LOG SCRAPER ==="
           tail -n 200 scraper-run.log || true
 
-      - name: Upload debug artifact
+      - name: Upload debug artifacts
         uses: actions/upload-artifact@v4
         if: always()
         with:
           name: debug-artifacts
           path: |
             scraper-run.log
-            debug.html
             resultats.csv
           retention-days: 1
 
-      - name: Commit CSV (push back)
+      - name: Commit CSV
         if: success() && github.ref == 'refs/heads/main'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add resultats.csv || true
-          git commit -m "Update resultats.csv $(date -u +'%Y-%m-%d %H:%M')" || echo "No changes to commit"
-          git push origin HEAD:main || echo "Push failed (check token/permissions)"
+          git commit -m "Update resultats.csv $(date -u +'%Y-%m-%d %H:%M')" || echo "No changes"
+          git push origin HEAD:main || echo "Push skipped"
