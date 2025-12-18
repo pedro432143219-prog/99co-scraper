@@ -11,23 +11,21 @@ const csvWriter = createObjectCsvWriter({
 });
 
 const crawler = new PlaywrightCrawler({
-    // On force le mode sans tête pour GitHub
     launchContext: { launchOptions: { headless: true } },
     async requestHandler({ page, log }) {
-        log.info(`Analyse de la page...`);
-        
-        // On attend que la page soit chargée
-        await page.waitForLoadState('networkidle');
+        log.info('Chargement de la page...');
+        await page.goto('https://www.99.co/id/jual/tanah/bali', { waitUntil: 'networkidle', timeout: 60000 });
 
-        // On extrait les données depuis le script interne __NEXT_DATA__ (le secret des pros)
+        // On extrait les données directement du script de la page
         const listings = await page.evaluate(() => {
-            const data = JSON.parse(document.getElementById('__NEXT_DATA__').textContent);
-            // On va chercher dans la structure spécifique de 99.co
-            const list = data.props?.pageProps?.initialState?.search?.result?.list || [];
-            return list.map(item => ({
-                title: item.title,
-                price: item.priceFormatted || item.price,
-                link: `https://www.99.co${item.url}`
+            const script = document.getElementById('__NEXT_DATA__');
+            if (!script) return [];
+            const data = JSON.parse(script.textContent);
+            const items = data.props?.pageProps?.initialState?.search?.result?.list || [];
+            return items.map(i => ({
+                title: i.title || 'Sans titre',
+                price: i.priceFormatted || i.price || '0',
+                link: 'https://www.99.co' + i.url
             }));
         });
 
@@ -35,10 +33,11 @@ const crawler = new PlaywrightCrawler({
             log.info(`✅ ${listings.length} annonces trouvées !`);
             await csvWriter.writeRecords(listings);
         } else {
-            log.error('❌ Aucune annonce trouvée dans le JSON.');
-            process.exit(1); // Force l'erreur pour voir le log dans GitHub
+            // Si on ne trouve rien, on enregistre une ligne d'erreur pour ne pas avoir un CSV vide
+            await csvWriter.writeRecords([{ title: 'ERREUR', price: '0', link: 'Aucune donnée trouvée' }]);
+            throw new Error('Aucune annonce trouvée. Le site a peut-être changé sa structure.');
         }
-    }
+    },
 });
 
-await crawler.run(['https://www.99.co/id/jual/tanah/bali']);
+await crawler.run();
