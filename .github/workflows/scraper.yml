@@ -3,12 +3,12 @@ name: Scraper Bali Auto
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 */6 * * *'  # Toutes les 6 heures
+    - cron: '0 */6 * * *'
 
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     
     steps:
       - name: Checkout
@@ -19,27 +19,39 @@ jobs:
         with:
           node-version: '20'
       
+      # ⚠️ AJOUT CRUCIAL : Installation des dépendances
+      - name: Install dependencies
+        run: npm install
+      
       - name: Run scraper
         run: node scraper.js
+        env:
+          NODE_ENV: production
       
       - name: Show results
         if: always()
         run: |
           echo "=== Resultats ==="
-          cat resultats.csv || echo "Pas de fichier"
+          if [ -f resultats.csv ]; then
+            wc -l resultats.csv
+            head -n 5 resultats.csv
+          else
+            echo "❌ Fichier resultats.csv introuvable"
+          fi
       
-      - name: Commit CSV to repo
+      - name: Commit and push results
         if: success()
         run: |
           git config user.name "GitHub Actions Bot"
           git config user.email "actions@github.com"
-          git add resultats.csv
-          git diff --quiet && git diff --staged --quiet || git commit -m "Update Bali data $(date +'%Y-%m-%d %H:%M')"
-          git push
+          git add resultats.csv || echo "Pas de changement"
+          git diff --quiet && git diff --staged --quiet || \
+            (git commit -m "Update: $(date +'%Y-%m-%d %H:%M UTC')" && git push)
       
-      - name: Upload artifact (backup)
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: resultats-backup
+          name: resultats-csv
           path: resultats.csv
+          retention-days: 7
