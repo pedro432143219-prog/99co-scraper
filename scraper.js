@@ -1,72 +1,84 @@
-const https = require('https');
-const fs = require('fs');
+import puppeteer from 'puppeteer';
+import { createObjectCsvWriter } from 'csv-writer';
 
-function fetchPage(url) {
-    return new Promise((resolve, reject) => {
-        const options = {
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                'Accept-Language': 'fr-FR,fr;q=0.9',
-            }
-        };
+const CSV_FILE = 'resultats.csv';
+const BASE_URL = 'https://www.99.co/id/jual/tanah/bali';
+const MAX_PAGES = 5; // Commencez petit pour tester
 
-        https.get(url, options, (res) => {
-            console.log(`Status: ${res.statusCode}`);
-            
-            if (res.statusCode === 301 || res.statusCode === 302) {
-                console.log(`Redirection: ${res.headers.location}`);
-                return fetchPage(res.headers.location).then(resolve).catch(reject);
-            }
-
-            let data = '';
-            res.setEncoding('utf8');
-            res.on('data', chunk => data += chunk);
-            res.on('end', () => resolve(data));
-        }).on('error', reject);
-    });
-}
-
-async function run() {
-    console.log('Demarrage du scraper');
-    
+(async () => {
+  console.log('🚀 Démarrage du scraper Bali...');
+  
+  const browser = await puppeteer.launch({
+    headless: 'new',
+    args: ['--no-sandbox', '--disable-setuid-sandbox']
+  });
+  
+  const page = await browser.newPage();
+  const results = [];
+  
+  for (let pageNum = 1; pageNum <= MAX_PAGES; pageNum++) {
     try {
-        const url = 'https://www.99.co/id/jual/tanah/bali';
-        console.log(`URL: ${url}`);
+      const url = `${BASE_URL}?page=${pageNum}`;
+      console.log(`📄 Page ${pageNum}/${MAX_PAGES} : ${url}`);
+      
+      await page.goto(url, { 
+        waitUntil: 'networkidle2',
+        timeout: 30000 
+      });
+      
+      // Attendre que les annonces se chargent
+      await page.waitForSelector('article, [data-testid*="listing"]', { timeout: 10000 });
+      
+      const listings = await page.evaluate(() => {
+        const items = [];
+        const articles = document.querySelectorAll('article, [data-testid*="listing-card"]');
         
-        const html = await fetchPage(url);
-        console.log(`Page recuperee: ${html.length} caracteres`);
-        
-        const scriptMatch = html.match(/<script id="__NEXT_DATA__"[^>]*>(.*?)<\/script>/s);
-        
-        if (!scriptMatch) {
-            console.log('Donnees non trouvees');
-            fs.writeFileSync('resultats.csv', 'Titre,Prix,Lien\n');
-            return;
-        }
-        
-        const jsonData = JSON.parse(scriptMatch[1]);
-        const items = jsonData?.props?.pageProps?.initialState?.search?.result?.list || [];
-        
-        console.log(`Biens trouves: ${items.length}`);
-        
-        let csv = 'Titre,Prix,Lien\n';
-        
-        items.forEach(item => {
-            const titre = (item.title || '').replace(/"/g, '""');
-            const prix = item.attributes?.price || '';
-            const lien = `https://www.99.co/id/properti/${item.slug}`;
-            csv += `"${titre}","${prix}","${lien}"\n`;
+        articles.forEach(article => {
+          const titleEl = article.querySelector('h2, [data-testid*="title"]');
+          const priceEl = article.querySelector('[data-testid*="price"], .price');
+          const linkEl = article.querySelector('a[href*="/properti/"]');
+          
+          if (titleEl && priceEl && linkEl) {
+            items.push({
+              titre: titleEl.innerText.trim(),
+              prix: priceEl.innerText.trim(),
+              lien: linkEl.href
+            });
+          }
         });
         
-        fs.writeFileSync('resultats.csv', csv);
-        console.log('Fichier CSV cree');
-        
+        return items;
+      });
+      
+      console.log(`   ✅ ${listings.length} annonces trouvées`);
+      results.push(...listings);
+      
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      
     } catch (error) {
-        console.error('ERREUR:', error.message);
-        fs.writeFileSync('resultats.csv', 'Titre,Prix,Lien\n');
-        process.exit(1);
+      console.error(`   ❌ Erreur page ${pageNum}: ${error.message}`);
     }
-}
-
-run();
+  }
+  
+  await browser.close();
+  
+  console.log(`\n📊 Total : ${results.length} annonces`);
+  
+  if (results.length === 0) {
+    console.error('❌ AUCUNE ANNONCE TROUVÉE - Vérifiez les sélecteurs CSS');
+    process.exit(1);
+  }
+  
+  // Écriture CSV
+  const csvWriter = createObjectCsvWriter({
+    path: CSV_FILE,
+    header: [
+      { id: 'titre', title: 'Titre' },
+      { id: 'prix', title: 'Prix' },
+      { id: 'lien', title: 'Lien' }
+    ]
+  });
+  
+  await csvWriter.writeRecords(results);
+  console.log(`✅ Fichier ${CSV_FILE} créé avec succès`);
+})();
