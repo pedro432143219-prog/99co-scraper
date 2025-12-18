@@ -8,50 +8,75 @@ on:
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     
     steps:
       - name: Checkout
         uses: actions/checkout@v4
       
-      - name: Setup Node
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
       
-      # ⚠️ AJOUT CRUCIAL : Installation des dépendances
+      - name: Cache dependencies
+        uses: actions/cache@v3
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-node-${{ hashFiles('**/package.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
+      
       - name: Install dependencies
-        run: npm install
+        run: |
+          npm install
+          npx playwright install chromium
+          npx playwright install-deps chromium
       
-      - name: Run scraper
+      - name: Run Crawlee scraper
         run: node scraper.js
-        env:
-          NODE_ENV: production
       
-      - name: Show results
+      - name: Verify results
         if: always()
         run: |
-          echo "=== Resultats ==="
+          echo "=== VÉRIFICATION ==="
           if [ -f resultats.csv ]; then
-            wc -l resultats.csv
-            head -n 5 resultats.csv
+            echo "✅ CSV créé"
+            lines=$(wc -l < resultats.csv)
+            echo "📊 Nombre de lignes: $lines"
+            
+            if [ "$lines" -gt 1 ]; then
+              echo ""
+              echo "📋 Aperçu (10 premières lignes):"
+              head -n 10 resultats.csv
+              echo "✅ SUCCÈS - Données collectées"
+            else
+              echo "⚠️ CSV vide ou header seulement"
+              exit 1
+            fi
           else
             echo "❌ Fichier resultats.csv introuvable"
+            exit 1
           fi
       
-      - name: Commit and push results
+      - name: Commit and push
         if: success()
         run: |
           git config user.name "GitHub Actions Bot"
           git config user.email "actions@github.com"
-          git add resultats.csv || echo "Pas de changement"
-          git diff --quiet && git diff --staged --quiet || \
-            (git commit -m "Update: $(date +'%Y-%m-%d %H:%M UTC')" && git push)
+          git add resultats.csv
+          
+          if git diff --staged --quiet; then
+            echo "Pas de changement"
+          else
+            git commit -m "🤖 Update Bali data - $(date -u +'%Y-%m-%d %H:%M UTC')"
+            git push
+          fi
       
-      - name: Upload artifact
+      - name: Upload CSV artifact
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: resultats-csv
+          name: resultats-bali-$(date +'%Y%m%d-%H%M')
           path: resultats.csv
           retention-days: 7
