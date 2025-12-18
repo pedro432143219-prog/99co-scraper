@@ -9,75 +9,64 @@ jobs:
   scrape:
     runs-on: ubuntu-latest
     timeout-minutes: 10
-
+    
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
+      
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-
-      - name: Show workspace before install
-        run: |
-          echo "=== WORKSPACE AVANT INSTALL ==="
-          pwd
-          ls -la
-
+      
       - name: Install dependencies
-        run: |
-          npm ci --no-audit --prefer-offline || npm install
-
-      # 🔥 ÉTAPE CRITIQUE (OBLIGATOIRE POUR PLAYWRIGHT)
+        run: npm install
+      
       - name: Install Playwright browsers
-        run: npx playwright install --with-deps
-
-      - name: Show versions
-        run: |
-          node -v
-          npm -v
-
+        run: npx playwright install chromium # <--- NOUVELLE ÉTAPE
+      
       - name: Run scraper
-        run: |
-          set -o pipefail
-          node scraper.js 2>&1 | tee scraper-run.log
-        env:
-          NODE_ENV: production
-
+        run: node scraper.js
+      
       - name: Show results
         if: always()
         run: |
           echo "=== RÉSULTATS ==="
-          ls -la
           if [ -f resultats.csv ]; then
-            echo "✅ CSV trouvé"
+            echo "✅ CSV créé"
             wc -l resultats.csv
-            head -n 20 resultats.csv
+            echo ""
+            head -n 10 resultats.csv
           else
-            echo "❌ CSV manquant"
+            echo "❌ Pas de CSV"
           fi
-          echo ""
-          echo "=== LOG SCRAPER ==="
-          tail -n 200 scraper-run.log || true
-
-      - name: Upload debug artifacts
+          
+          if [ -f debug.html ]; then
+            echo ""
+            echo "📄 debug.html: $(wc -c < debug.html) octets"
+          fi
+      
+      - name: Upload debug
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: debug-artifacts
-          path: |
-            scraper-run.log
-            resultats.csv
+          name: debug-html
+          path: debug.html
           retention-days: 1
-
+      
       - name: Commit CSV
-        if: success() && github.ref == 'refs/heads/main'
+        if: success()
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add resultats.csv || true
-          git commit -m "Update resultats.csv $(date -u +'%Y-%m-%d %H:%M')" || echo "No changes"
-          git push origin HEAD:main || echo "Push skipped"
+          git config user.name "Bot"
+          git config user.email "bot@github.com"
+          git add resultats.csv
+          git diff --quiet && git diff --staged --quiet || \
+            (git commit -m "Update $(date -u +'%Y-%m-%d %H:%M')" && git push)
+      
+      - name: Upload CSV
+        uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: resultats
+          path: resultats.csv
+          retention-days: 7
