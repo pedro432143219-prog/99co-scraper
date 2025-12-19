@@ -14,36 +14,35 @@ const csvWriter = createObjectCsvWriter({
 });
 
 const crawler = new PlaywrightCrawler({
-    maxConcurrency: 1,
-    // On augmente le temps d'attente car le site te surveille
-    requestHandlerTimeoutSecs: 120, 
-    
+    maxConcurrency: 1, // Une seule page à la fois, obligatoirement
+    requestHandlerTimeoutSecs: 180, 
     launchContext: {
         launchOptions: {
             headless: true,
-            args: [
-                '--no-sandbox',
-                '--disable-setuid-sandbox',
-                '--disable-blink-features=AutomationControlled', // Cache le fait que c'est un robot
-            ],
+            args: ['--no-sandbox', '--disable-blink-features=AutomationControlled']
         },
     },
-
     async requestHandler({ page, log, request }) {
-        log.info(`🕵️ Tentative d'accès discret : ${request.url}`);
+        log.info(`🕵️ Navigation furtive : ${request.url}`);
         
-        // On imite un navigateur humain (User-Agent aléatoire)
+        // Emulation d'un iPhone 14 pour contourner les protections desktop
         await page.setExtraHTTPHeaders({
-            'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
-            'Accept-Language': 'id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7',
-            'Referer': 'https://www.google.com/'
+            'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.5 Mobile/15E148 Safari/604.1',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'id-ID,id;q=0.9',
+            'Cache-Control': 'no-cache',
+            'Pragma': 'no-cache'
         });
 
-        // Navigation avec une attente plus longue
+        // 1. Aller sur Google d'abord pour "nettoyer" le referer
+        await page.goto('https://www.google.com', { waitUntil: 'networkidle' });
+        await new Promise(r => setTimeout(r, 2000));
+
+        // 2. Aller sur l'annonce
         await page.goto(request.url, { waitUntil: 'networkidle', timeout: 90000 });
         
-        // Pause "lecture" pour simuler un humain
-        await new Promise(r => setTimeout(r, 8000));
+        // Pause "humaine" longue (15 secondes) pour laisser les scripts anti-bot se calmer
+        await new Promise(r => setTimeout(r, 15000));
 
         const listings = await page.evaluate(() => {
             const items = [];
@@ -76,13 +75,11 @@ const crawler = new PlaywrightCrawler({
         });
 
         if (listings.length > 0) {
-            log.info(`✅ RÉUSSI : ${listings.length} terrains trouvés.`);
+            log.info(`✅ RÉUSSI : ${listings.length} terrains.`);
             await csvWriter.writeRecords(listings);
-        } else {
-            log.error('❌ Accès réussi mais aucune donnée lue. Le site a peut-être changé de structure.');
         }
     },
 });
 
-// TEST : On ne tente QUE la page 1 pour ne pas griller l'IP
+// ON NE TESTE QU'UNE PAGE POUR L'INSTANT
 await crawler.run(['https://www.99.co/id/jual/tanah/bali?page=1']);
