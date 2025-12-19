@@ -1,182 +1,118 @@
 import { PlaywrightCrawler } from 'crawlee';
-import fs from 'fs';
-import crypto from 'crypto';
+import { createObjectCsvWriter } from 'csv-writer';
 
-// ================= CONFIG =================
-const START_URLS = [
-  'https://www.99.co/id/jual/tanah/bali'
-];
-
-const OUTPUT_CSV = 'resultats.csv';
-
-// ================= UTILITAIRES =================
-function hash(str) {
-  return crypto.createHash('sha256').update(str).digest('base64');
-}
-
-function extractSurface(item, text) {
-  try {
-    if (item?.attributes?.land_size) {
-      const v = parseInt(item.attributes.land_size, 10);
-      if (v > 0) return v;
-    }
-    if (item?.land_size) {
-      const v = parseInt(item.land_size, 10);
-      if (v > 0) return v;
-    }
-    const m = text.match(/(\d{2,6})\s*(?:m2|m²|sqm)/i);
-    if (m) return parseInt(m[1], 10);
-  } catch {}
-  return 0;
-}
-
-function extractPrice(item, text) {
-  try {
-    if (item?.attributes?.price) {
-      const v = parseInt(item.attributes.price, 10);
-      if (v > 1_000_000) return v;
-    }
-    if (item?.price) {
-      const v = parseInt(item.price, 10);
-      if (v > 1_000_000) return v;
-    }
-    const m = text.match(/"price":\s*"?(\d{8,15})"?/);
-    if (m) return parseInt(m[1], 10);
-
-    const t = text.match(/([\d\.]+)\s*(jt|juta|miliar|billion)/);
-    if (t) {
-      let v = parseFloat(t[1].replace(/\./g, ''));
-      if (t[2].includes('jt') || t[2].includes('juta')) v *= 1_000_000;
-      if (t[2].includes('miliar') || t[2].includes('billion')) v *= 1_000_000_000;
-      if (v > 1_000_000) return Math.round(v);
-    }
-  } catch {}
-  return 0;
-}
-
-// ================= CSV INIT =================
-const rows = [];
-rows.push([
-  'Titre',
-  'Prix_total_IDR',
-  'Lien',
-  'Surface_m2',
-  'Prix_m2_IDR',
-  'Beach',
-  'WhiteSand',
-  'Hash'
-]);
-
-const seen = new Set();
+// ================= CONFIG CSV =================
+const csvWriter = createObjectCsvWriter({
+    path: 'resultats.csv',
+    header: [
+        { id: 'title', title: 'Titre' },
+        { id: 'price', title: 'Prix' },
+        { id: 'link', title: 'Lien' },
+        { id: 'location', title: 'Localisation' }
+    ]
+});
 
 // ================= CRAWLER =================
 const crawler = new PlaywrightCrawler({
-  maxConcurrency: 1,
-  headless: true,
-  
-  // User-Agent réaliste pour éviter les blocages
-  preNavigationHooks: [
-    async ({ page, request, session }) => {
-      await page.setExtraHTTPHeaders({
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept-Language': 'en-US,en;q=0.9,fr;q=0.8'
-      });
+    // On garde le headless true pour GitHub Actions
+    launchContext: { 
+        launchOptions: { 
+            headless: true,
+            args: ['--no-sandbox', '--disable-setuid-sandbox'] // Options vitales pour Linux/GitHub
+        } 
     },
-  ],
-
-  async requestHandler({ page, request }) {
-    console.log(`🌐 Page: ${request.url}`);
-
-    // Navigation
-    await page.goto(request.url, { waitUntil: 'domcontentloaded' });
-
-    // 🔑 EXTRACTION DU BLOC __NEXT_DATA__ (Méthode du script Google Sheet)
-    const rawData = await page.evaluate(() => {
-        const script = document.getElementById('__NEXT_DATA__');
-        return script ? script.textContent : null;
-    });
-
-    if (!rawData) {
-        console.log("❌ Bloc __NEXT_DATA__ non trouvé. Le scraping du DOM a échoué.");
-        return;
-    }
-
-    let listings = [];
-    try {
-        const data = JSON.parse(rawData);
-        
-        // Cherche les annonces dans le JSON (chemin le plus probable)
-        let rawListings = data?.props?.pageProps?.initialState?.search?.listings || [];
-        
-        // Si le chemin est vide, nous allons chercher plus profondément (comme dans votre script GS)
-        if (rawListings.length === 0) {
-            rawListings = data?.props?.pageProps?.initialState?.search?.aggregation?.groups || [];
-        }
-        
-        if (rawListings.length > 0 && rawListings[0]?.data) {
-            rawListings.forEach(g => { if (g.data) listings = listings.concat(g.data); });
-        } else {
-            listings = rawListings;
-        }
-    } catch (e) {
-        console.error(`❌ Erreur lors du parsing du JSON: <LaTex>${e.message}`);
-        return;
-    }
     
-    console.log(`📦 Total annonces trouvées dans __NEXT_DATA__: $</LaTex>{listings.length}`);
+    // On se fait passer pour un vrai navigateur Chrome Mac
+    preNavigationHooks: [
+        async ({ page }) => {
+            await page.setExtraHTTPHeaders({
+                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept-Language': 'en-US,en;q=0.9'
+            });
+        }
+    ],
 
-    // ================= TRAITEMENT =================
-    for (const item of listings) {
-      const text = JSON.stringify(item).toLowerCase();
+    async requestHandler({ page, log }) {
+        log.info(`Analyse de : ${page.url()}`);
+        
+        // 1. Navigation et attente intelligente
+        await page.goto(page.url(), { waitUntil: 'domcontentloaded', timeout: 60000 });
+        
+        log.info('Attente du chargement des cartes...');
+        // On attend qu'au moins un élément avec un prix apparaisse (indice visuel fort)
+        try {
+            // On attend n'importe quel élément qui pourrait être une carte. 
+            // Les classes changent souvent, on vise large.
+            await page.waitForSelector('div[class*="search-result"]', { timeout: 15000 });
+        } catch (e) {
+            log.warning("Timeout attente sélecteur, on tente l'extraction quand même.");
+        }
 
-      const surface = extractSurface(item, text);
-      const price = extractPrice(item, text);
+        // 2. Scroll pour déclencher le chargement des images/données (Lazy loading)
+        await page.evaluate(async () => {
+            window.scrollTo(0, document.body.scrollHeight / 2);
+            await new Promise(r => setTimeout(r, 1000));
+            window.scrollTo(0, document.body.scrollHeight);
+        });
 
-      if (price <= 0) continue;
-      if (surface < 1000 || surface > 30000) continue;
+        // 3. EXTRACTION VISUELLE (DOM SCRAPING)
+        // C'est la partie "Génie" : on utilise des sélecteurs génériques pour ne pas casser si une classe change
+        const listings = await page.evaluate(() => {
+            const items = [];
+            // On cherche tous les liens qui ressemblent à des annonces
+            // Souvent les cartes sont des liens <a> ou contiennent des liens
+            const cards = Array.from(document.querySelectorAll('div[class*="card"], div[class*="listing"]'));
 
-      const priceM2 = Math.round(price / surface);
+            cards.forEach(card => {
+                try {
+                    // On cherche le prix (texte qui contient Rp ou Miliar)
+                    const priceEl = card.innerText.match(/Rp\s*[\d,.]+\s*(Miliar|Juta|Jt|M)/i);
+                    const price = priceEl ? priceEl[0] : null;
 
-      let link = 'URL_MANQUANTE';
-      if (item.slug) {
-        link = `https://www.99.co/id/properti/<LaTex>${item.slug}`;
-      } else if (item.url) {
-        link = item.url.startsWith('http')
-          ? item.url
-          : `https://www.99.co$</LaTex>{item.url}`;
-      }
+                    // On cherche le titre (souvent un h1, h2, h3 ou bold)
+                    const titleEl = card.querySelector('h1, h2, h3, h4, strong');
+                    const title = titleEl ? titleEl.innerText.trim() : card.innerText.split('\n')[0];
 
-      const h = hash(link);
-      if (seen.has(h)) continue;
-      seen.add(h);
+                    // On cherche le lien
+                    const linkEl = card.querySelector('a') || card.closest('a');
+                    let link = linkEl ? linkEl.getAttribute('href') : null;
+                    if (link && !link.startsWith('http')) link = 'https://www.99.co' + link;
 
-      rows.push([
-        item.title || 'Terrain',
-        price,
-        link,
-        surface,
-        priceM2,
-        /pantai|beach|seaside|tepi laut/.test(text) ? 'YES' : 'NO',
-        /pasir putih|white sand|pantai putih/.test(text) ? 'YES' : 'NO',
-        h
-      ]);
-    }
-  }
+                    // On cherche la localisation
+                    const locText = card.innerText; 
+                    // Extraction brute si on ne trouve pas mieux
+
+                    // FILTRE : On ne garde que si on a un prix ET un lien (pour éviter les pubs)
+                    if (price && link) {
+                        items.push({
+                            title: title || 'Titre Inconnu',
+                            price: price,
+                            link: link,
+                            location: 'Bali' // Placeholder si non trouvé
+                        });
+                    }
+                } catch (err) {
+                    // Ignorer les erreurs sur une carte spécifique
+                }
+            });
+            
+            // Dédoublonnage basique basé sur le lien
+            return items.filter((v,i,a)=>a.findIndex(t=>(t.link === v.link))===i);
+        });
+
+        if (listings.length > 0) {
+            log.info(`✅ VICTOIRE : ${listings.length} annonces trouvées via le visuel !`);
+            await csvWriter.writeRecords(listings);
+        } else {
+            log.error("❌ Toujours rien. Le site détecte peut-être le bot ou la structure HTML est trop complexe.");
+            // On force une ligne d'erreur pour voir le CSV
+            await csvWriter.writeRecords([{ title: 'ERREUR - CHECK LOGS', price: '0', link: page.url() }]);
+        }
+    },
+
+    failedRequestHandler({ request, log }) {
+        log.error(`Échec sur ${request.url}`);
+    },
 });
 
-// ================= RUN =================
-try {
-    await crawler.run(START_URLS);
-} catch (error) {
-    console.error("❌ Erreur critique lors du crawling. Le script va tenter d'écrire les données partielles.", error);
-    // Le script continue pour écrire le CSV avec les données partielles
-}
-
-// ================= WRITE CSV =================
-const csv = rows.map(r =>
-  r.map(v => `"<LaTex>${String(v).replace(/"/g, '""')}"`).join(',')
-).join('\n');
-
-fs.writeFileSync(OUTPUT_CSV, csv, 'utf8');
-
-console.log(`✅ CSV généré: $</LaTex>{rows.length - 1} annonces`);
+await crawler.run(['https://www.99.co/id/jual/tanah/bali']);
