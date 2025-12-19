@@ -87,59 +87,46 @@ const crawler = new PlaywrightCrawler({
   async requestHandler({ page, request }) {
     console.log(`🌐 Page: ${request.url}`);
 
-    const results = [];
-
-    // 🔑 INTERCEPTION API 99.CO (Correction Finale)
-    await page.route('**/*', async route => {
-      const url = route.request().url();
-      const method = route.request().method();
-
-      // Cible la nouvelle URL de l'API de recherche
-      if (method === 'POST' && url.includes('/api/biz/v2/listings/search')) {
-        try {
-          const response = await route.fetch();
-          const json = await response.json();
-
-          const listings =
-            json?.data?.listings ||
-            json?.data?.result ||
-            json?.listings ||
-            [];
-
-          if (Array.isArray(listings) && listings.length > 0) {
-            console.log(`📡 API capturée: ${listings.length} annonces`);
-            listings.forEach(l => results.push(l));
-          }
-
-          return route.fulfill({ response });
-        } catch (e) {
-          console.error(`Erreur lors du traitement de l'API de recherche: ${e.message}`);
-          return route.continue();
-        }
-      }
-
-      return route.continue();
-    });
-
     // Navigation
     await page.goto(request.url, { waitUntil: 'domcontentloaded' });
 
-    // 🔑 ATTENDRE L'AFFICHAGE DE LA LISTE D'ANNONCES (Nouveau bloc)
+    // 🔑 EXTRACTION DU BLOC __NEXT_DATA__ (Méthode du script Google Sheet)
+    const rawData = await page.evaluate(() => {
+        const script = document.getElementById('__NEXT_DATA__');
+        return script ? script.textContent : null;
+    });
+
+    if (!rawData) {
+        console.log("❌ Bloc __NEXT_DATA__ non trouvé. Le scraping du DOM a échoué.");
+        return;
+    }
+
+    let listings = [];
     try {
-        // Le sélecteur cible le conteneur des annonces.
-        await page.waitForSelector('div[data-testid="listing-card"]', { timeout: 20000 });
-        console.log("✅ Liste d'annonces détectée sur la page.");
+        const data = JSON.parse(rawData);
+        
+        // Cherche les annonces dans le JSON (chemin le plus probable)
+        let rawListings = data?.props?.pageProps?.initialState?.search?.listings || [];
+        
+        // Si le chemin est vide, nous allons chercher plus profondément (comme dans votre script GS)
+        if (rawListings.length === 0) {
+            rawListings = data?.props?.pageProps?.initialState?.search?.aggregation?.groups || [];
+        }
+        
+        if (rawListings.length > 0 && rawListings[0]?.data) {
+            rawListings.forEach(g => { if (g.data) listings = listings.concat(g.data); });
+        } else {
+            listings = rawListings;
+        }
     } catch (e) {
-        console.log("⚠️ La liste d'annonces n'a pas été détectée dans le délai imparti.");
+        console.error(`❌ Erreur lors du parsing du JSON: <LaTex>${e.message}`);
+        return;
     }
     
-    // Attendre un peu plus pour s'assurer que toutes les données sont chargées
-    await page.waitForTimeout(5000);
-
-    console.log(`📦 Total annonces collectées: ${results.length}`);
+    console.log(`📦 Total annonces trouvées dans __NEXT_DATA__: $</LaTex>{listings.length}`);
 
     // ================= TRAITEMENT =================
-    for (const item of results) {
+    for (const item of listings) {
       const text = JSON.stringify(item).toLowerCase();
 
       const surface = extractSurface(item, text);
