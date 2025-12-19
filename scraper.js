@@ -74,7 +74,7 @@ const crawler = new PlaywrightCrawler({
   maxConcurrency: 1,
   headless: true,
   
-  // AJOUTÉ : User-Agent réaliste pour éviter les blocages
+  // User-Agent réaliste pour éviter les blocages
   preNavigationHooks: [
     async ({ page, request, session }) => {
       await page.setExtraHTTPHeaders({
@@ -124,18 +124,17 @@ const crawler = new PlaywrightCrawler({
     // Navigation
     await page.goto(request.url, { waitUntil: 'domcontentloaded' });
 
-    // 🔑 ATTENDRE L'APPEL API DE RECHERCHE (Correction Finale)
+    // 🔑 ATTENDRE L'AFFICHAGE DE LA LISTE D'ANNONCES (Nouveau bloc)
     try {
-        await page.waitForResponse(response => 
-            response.url().includes('/api/biz/v2/listings/search') && response.request().method() === 'POST', 
-            { timeout: 15000 } // Attendre jusqu'à 15 secondes
-        );
+        // Le sélecteur cible le conteneur des annonces.
+        await page.waitForSelector('div[data-testid="listing-card"]', { timeout: 20000 });
+        console.log("✅ Liste d'annonces détectée sur la page.");
     } catch (e) {
-        console.log("⚠️ L'appel API de recherche n'a pas été détecté dans le délai imparti.");
+        console.log("⚠️ La liste d'annonces n'a pas été détectée dans le délai imparti.");
     }
     
     // Attendre un peu plus pour s'assurer que toutes les données sont chargées
-    await page.waitForTimeout(2000);
+    await page.waitForTimeout(5000);
 
     console.log(`📦 Total annonces collectées: ${results.length}`);
 
