@@ -46,8 +46,8 @@ function extractPrice(item, text) {
     const t = text.match(/([\d\.]+)\s*(jt|juta|miliar|billion)/);
     if (t) {
       let v = parseFloat(t[1].replace(/\./g, ''));
-      if (t[2].includes('jt') || t[2].includes('juta')) v *= 1000000;
-      if (t[2].includes('miliar') || t[2].includes('billion')) v *= 1000000000;
+      if (t[2].includes('jt') || t[2].includes('juta')) v *= 1_000_000;
+      if (t[2].includes('miliar') || t[2].includes('billion')) v *= 1_000_000_000;
       if (v > 1_000_000) return Math.round(v);
     }
   } catch {}
@@ -73,23 +73,29 @@ const seen = new Set();
 const crawler = new PlaywrightCrawler({
   maxConcurrency: 1,
   headless: true,
+  
+  // AJOUTÉ : User-Agent réaliste pour éviter les blocages
+  preNavigationHooks: [
+    async ({ page, request, session }) => {
+      await page.setExtraHTTPHeaders({
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept-Language': 'en-US,en;q=0.9,fr;q=0.8'
+      });
+    },
+  ],
 
   async requestHandler({ page, request }) {
     console.log(`🌐 Page: ${request.url}`);
 
     const results = [];
 
-    // 🔑 INTERCEPTION API 99.CO (Version de débogage)
+    // 🔑 INTERCEPTION API 99.CO (Correction Finale)
     await page.route('**/*', async route => {
       const url = route.request().url();
       const method = route.request().method();
 
-      // Log toutes les requêtes POST et les requêtes GET qui pourraient être l'API
-      if (method === 'POST' || (method === 'GET' && url.includes('api'))) {
-          console.log(`DEBUG API: ${method} ${url}`);
-      }
-
-      if (url.includes('/search') && url.includes('jual')) {
+      // Cible la nouvelle URL de l'API de recherche
+      if (method === 'POST' && url.includes('/api/biz/v2/listings/search')) {
         try {
           const response = await route.fetch();
           const json = await response.json();
@@ -107,7 +113,7 @@ const crawler = new PlaywrightCrawler({
 
           return route.fulfill({ response });
         } catch (e) {
-          console.error(`Erreur lors du traitement de l'ancienne API: ${e.message}`);
+          console.error(`Erreur lors du traitement de l'API de recherche: ${e.message}`);
           return route.continue();
         }
       }
@@ -118,8 +124,18 @@ const crawler = new PlaywrightCrawler({
     // Navigation
     await page.goto(request.url, { waitUntil: 'domcontentloaded' });
 
-    // 🔑 ATTENDRE 15 SECONDES POUR LE DÉBOGAGE
-    await page.waitForTimeout(15000);
+    // 🔑 ATTENDRE L'APPEL API DE RECHERCHE (Correction Finale)
+    try {
+        await page.waitForResponse(response => 
+            response.url().includes('/api/biz/v2/listings/search') && response.request().method() === 'POST', 
+            { timeout: 15000 } // Attendre jusqu'à 15 secondes
+        );
+    } catch (e) {
+        console.log("⚠️ L'appel API de recherche n'a pas été détecté dans le délai imparti.");
+    }
+    
+    // Attendre un peu plus pour s'assurer que toutes les données sont chargées
+    await page.waitForTimeout(2000);
 
     console.log(`📦 Total annonces collectées: ${results.length}`);
 
